@@ -1,60 +1,131 @@
-# 🚀 YC Intelligence Platform
+YC Company Scraper & Intelligence Dashboard
 
-A production-grade data pipeline and full-stack analytics platform that tracks Y Combinator companies. This system automates the extraction of 1,000+ company profiles, monitors their growth history (snapshots), and provides a real-time dashboard for investors and analysts.
 
-## 📋 Project Overview
-Unlike simple scrapers, the **YC Intelligence Platform** is built for **data integrity** and **historical tracking**. It detects when a company changes its stage (e.g., from *Active* to *Public*) or employee count, preserving a timeline of these changes in the database.
+1. Architecture Overview
 
-### Key Features
-* **🕷️ Advanced Scraper:** Uses **Playwright** (Headless Chromium) to handle dynamic infinite scrolling and heavy AJAX loads.
-* **⏳ Time-Travel Data:** Implemented a "Snapshot" system. If a company updates its description or stage, the old data is kept, and a new snapshot is created.
-* **🔍 Web Enrichment:** A secondary worker script visits company websites to detect **Careers Pages**, **Blogs**, and extract **Contact Emails**.
-* **📊 Real-Time Analytics:** A Next.js dashboard featuring Recharts to visualize batch distribution, industry trends, and location hotspots.
-* **🛡️ Robust Error Handling:** The scraper uses transactional rollback logic to ensure partial failures do not corrupt the database.
-* **🔒 System Monitoring:** An internal Admin Dashboard tracks scraper performance, run times, and success rates.
+This project operates as a three-tier local application, completely decoupled to ensure modularity and ease of debugging.
 
----
+Frontend (Dashboard): Built with Next.js 14 (App Router). It serves the UI on localhost:3000 and communicates with the database via server-side API routes.
 
-## 🛠️ Tech Stack & Architecture
+Database: PostgreSQL (running locally on port 5432). It acts as the centralized source of truth for both the scraper and the dashboard.
 
-```mermaid
-graph TD
-    A[YC Website] -->|Playwright Scraper| B(Python Engine)
-    B -->|Deduplication SHA256| C{PostgreSQL DB}
-    D[Enrichment Worker] -->|Updates Emails| C
-    E[Next.js API Layer] -->|SQL Queries| C
-    F[React Frontend] -->|JSON Data| E
+Data Engine (Scraper): A standalone Python script that executes independently to fetch data from the web and populate the database.
 
-    yc-dashboard/
-├── app/
-│   ├── admin/              # System Status & Logs Page
-│   ├── analytics/          # Global Analytics Charts
-│   ├── api/                # Backend API Routes
-│   │   ├── companies/      # CRUD for Company Data
-│   │   └── runs/           # Scraper Log Endpoints
-│   ├── companies/          # Dynamic Detail Pages ([id])
-│   ├── page.tsx            # Main Dashboard (Search/Filter/Table)
-│   └── layout.tsx          # Global UI Wrappers
-├── public/                 # Static Assets
-├── scraper_v6_production.py# Main Data Pipeline
-├── enrichment_worker.py    # Email & Blog Detector
-├── requirements.txt        # Python Dependencies
-└── README.md               # Project Documentation
+Data Flow:
 
-# Install Python dependencies
-pip install playwright psycopg2 requests
-playwright install chromium
+Python Scraper ➜ Writes to ➜ Local PostgreSQL ➜ Reads from ➜ Next.js API
 
-# Run the Scraper
-python scraper_v6_production.py
 
-# (Optional) Run Enrichment
-python enrichment_worker.py
+2. Database Schema
+The database is normalized to support Time-Travel Analysis, separating immutable company identity from changing attributes.
 
-# Install Node dependencies
+companies Table
+Stores static identity. Prevents duplicates.
+
+id (PK): Unique Integer.
+
+name: Company Name (indexed for search).
+
+domain: Official URL.
+
+company_snapshots Table
+Stores historical states. A new row is created for every scrape run.
+
+id (PK): Unique Integer.
+
+company_id (FK): Links to companies.
+
+batch: YC Batch (e.g., W24, S23).
+
+stage: Status (Active, Acquired, Dead).
+
+location: HQ Location.
+
+description: Pitch/Bio.
+
+scraped_at: Timestamp (UTC).
+
+
+3. Incremental Scraping Logic
+
+To ensure data integrity and avoid overwriting history, the scraper uses a Snapshot Strategy:
+
+Identity Check: The scraper first checks if a company exists in the companies table using its name or domain.
+
+If New: Insert into companies → Get new id.
+
+If Existing: Retrieve existing id.
+
+Snapshot Insertion: It never updates old rows. Instead, it inserts a new record into company_snapshots with the current timestamp.
+
+Latest View: The dashboard queries only the latest snapshot using a specific SQL strategy:
+
+SQL
+
+SELECT * FROM companies c
+LEFT JOIN company_snapshots s ON c.id = s.company_id
+WHERE s.scraped_at = (
+    SELECT MAX(scraped_at) FROM company_snapshots WHERE company_id = c.id
+)
+
+
+4. Performance Metrics
+
+
+Query Latency: Optimized SQL joins ensure sub-50ms response times on local datasets.
+
+Connection Pooling: The Next.js backend uses pg pooling to handle multiple API requests without exhausting database connections.
+
+Pagination: Implements server-side LIMIT and OFFSET to render data efficiently, regardless of database size.
+
+Visual Performance: Charts utilize fixed-height containers to prevent layout shifts and ensure responsiveness.
+
+
+5. Local Setup Guide
+
+
+Follow these steps to run the project on your machine.
+
+Prerequisites
+Node.js 18+
+
+Python 3.10+
+
+PostgreSQL (Local Service)
+
+Step 1: Database Configuration
+Ensure your local PostgreSQL service is running.
+
+Port: 5432
+
+Database Name: postgres
+
+User/Password: postgres / 12341 (or your specific credentials).
+
+Step 2: Run the Scraper (Python)
+The scraper must run first to populate the database.
+
+Navigate to the project folder.
+
+Open scraper_v6.py and verify DB_CONFIG matches your local DB.
+
+Install dependencies and run:
+
+Bash
+
+pip install psycopg2-binary
+python scraper_v6.py
+
+Step 3: Run the Dashboard (Next.js)
+Create/Update the .env file in the root directory:
+
+Code snippet
+
+DATABASE_URL="postgresql://postgres:12341@localhost:5432/postgres"
+Start the development server:
+
+Bash
+
 npm install
-
-# Start the Server
 npm run dev
-
-Open http://localhost:3000 to view the application.
+Open http://localhost:3000.
